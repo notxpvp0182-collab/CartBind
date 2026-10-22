@@ -1,1 +1,982 @@
+name: Build Anchor Bind JAR
 
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Project Files
+        run: |
+          mkdir -p src/main/java/com/ahmad/anchorbind/config
+          mkdir -p src/main/java/com/ahmad/anchorbind/util
+          mkdir -p src/main/resources/assets/anchorbind/lang
+
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  maven {
+                      name = 'Fabric'
+                      url = 'https://maven.fabricmc.net/'
+                  }
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          rootProject.name = 'anchor-bind'
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2G
+          org.gradle.parallel=true
+          minecraft_version=1.21.11
+          yarn_mappings=1.21.11+build.6
+          loader_version=0.18.4
+          loom_version=1.14.10
+          fabric_version=0.141.6+1.21.11
+          modmenu_version=17.0.1
+          mod_version=1.0.0
+          maven_group=com.ahmad.anchorbind
+          archives_base_name=anchor-bind
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'fabric-loom' version "${loom_version}"
+              id 'maven-publish'
+          }
+
+          version = "${project.mod_version}+mc${project.minecraft_version}"
+          group = project.maven_group
+
+          base {
+              archivesName = project.archives_base_name
+          }
+
+          repositories {
+              mavenCentral()
+              maven {
+                  name = "TerraformersMC"
+                  url = "https://maven.terraformersmc.com/releases/"
+              }
+          }
+
+          dependencies {
+              minecraft "com.mojang:minecraft:${project.minecraft_version}"
+              mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+              modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+              modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+              modCompileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
+              modLocalRuntime "com.terraformersmc:modmenu:${project.modmenu_version}"
+          }
+
+          processResources {
+              inputs.property "version", project.version
+              filesMatching("fabric.mod.json") {
+                  expand "version": inputs.properties.version
+              }
+          }
+
+          tasks.withType(JavaCompile).configureEach {
+              it.options.release = 21
+              it.options.encoding = "UTF-8"
+          }
+
+          java {
+              withSourcesJar()
+              sourceCompatibility = JavaVersion.VERSION_21
+              targetCompatibility = JavaVersion.VERSION_21
+          }
+          EOF
+
+          cat << 'EOF' > src/main/resources/fabric.mod.json
+          {
+            "schemaVersion": 1,
+            "id": "anchorbind",
+            "version": "${version}",
+            "name": "Anchor Bind",
+            "description": "Lightweight Crystal & Anchor PvP utility mod that places, charges, and activates a Respawn Anchor with a single keybind. Credit: Ahmad.",
+            "authors": ["Ahmad"],
+            "license": "MIT",
+            "environment": "client",
+            "entrypoints": {
+              "client": ["com.ahmad.anchorbind.AnchorBindClient"],
+              "modmenu": ["com.ahmad.anchorbind.config.ModMenuIntegration"]
+            },
+            "depends": {
+              "fabricloader": "*",
+              "minecraft": "=1.21.11",
+              "java": ">=21",
+              "fabric-api": "*"
+            },
+            "suggests": {
+              "modmenu": "*"
+            }
+          }
+          EOF
+
+          cat << 'EOF' > src/main/resources/assets/anchorbind/lang/en_us.json
+          {
+            "key.category.anchorbind.general": "Anchor Bind",
+            "key.anchorbind.execute_combo": "Anchor Bind: Execute Anchor Combo",
+            "text.anchorbind.no_anchor": "No Respawn Anchor!",
+            "text.anchorbind.no_glowstone": "No Glowstone!",
+            "screen.anchorbind.config.title": "Anchor Bind",
+            "screen.anchorbind.config.enabled_on": "Enable Mod: ON",
+            "screen.anchorbind.config.enabled_off": "Enable Mod: OFF",
+            "screen.anchorbind.config.combo_speed": "Combo Speed: %s s",
+            "screen.anchorbind.config.glowstone_count": "Glowstone Count: %s",
+            "screen.anchorbind.config.restore_slot_on": "Restore Previous Slot: ON",
+            "screen.anchorbind.config.restore_slot_off": "Restore Previous Slot: OFF",
+            "screen.anchorbind.config.open_controls": "Configure Keybind (%s)...",
+            "screen.anchorbind.config.credit": "Created by Ahmad | Minecraft 1.21.11"
+          }
+          EOF
+
+          cat << 'EOF' > src/main/java/com/ahmad/anchorbind/AnchorBindClient.java
+          package com.ahmad.anchorbind;
+
+          import com.ahmad.anchorbind.config.AnchorBindConfig;
+          import com.ahmad.anchorbind.util.AnchorComboController;
+          import net.fabricmc.api.ClientModInitializer;
+          import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
+          import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+          import net.minecraft.client.option.KeyBinding;
+          import net.minecraft.client.util.InputUtil;
+          import net.minecraft.util.Identifier;
+          import org.lwjgl.glfw.GLFW;
+          import org.slf4j.Logger;
+          import org.slf4j.LoggerFactory;
+
+          public final class AnchorBindClient implements ClientModInitializer {
+              public static final String MOD_ID = "anchorbind";
+              public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+
+              public static final KeyBinding.Category KEY_CATEGORY = KeyBinding.Category.create(
+                      Identifier.of(MOD_ID, "general")
+              );
+
+              private static KeyBinding anchorComboKeyBinding;
+              private static boolean wasKeyHeld = false;
+
+              @Override
+              public void onInitializeClient() {
+                  AnchorBindConfig.load();
+
+                  anchorComboKeyBinding = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                          "key.anchorbind.execute_combo",
+                          InputUtil.Type.KEYSYM,
+                          GLFW.GLFW_KEY_V,
+                          KEY_CATEGORY
+                  ));
+
+                  ClientTickEvents.END_CLIENT_TICK.register(client -> {
+                      if (anchorComboKeyBinding == null) {
+                          return;
+                      }
+
+                      boolean pressedThisTick = false;
+                      while (anchorComboKeyBinding.wasPressed()) {
+                          pressedThisTick = true;
+                      }
+
+                      boolean currentlyDown = anchorComboKeyBinding.isPressed();
+
+                      if (!AnchorBindConfig.isEnabled()) {
+                          if (AnchorComboController.isRunning()) {
+                              AnchorComboController.cancelAndReset(client);
+                          }
+                          wasKeyHeld = currentlyDown;
+                          return;
+                      }
+
+                      if (AnchorComboController.isRunning()) {
+                          AnchorComboController.tick(client);
+                      }
+
+                      if (pressedThisTick && !wasKeyHeld) {
+                          wasKeyHeld = true;
+                          if (client.currentScreen == null && !AnchorComboController.isRunning()) {
+                              AnchorComboController.startCombo(client);
+                          }
+                      } else if (!currentlyDown) {
+                          wasKeyHeld = false;
+                      }
+                  });
+
+                  LOGGER.info("Anchor Bind (1.21.11) initialized. Credit: Ahmad");
+              }
+
+              public static KeyBinding getAnchorComboKeyBinding() {
+                  return anchorComboKeyBinding;
+              }
+          }
+          EOF
+
+          cat << 'EOF' > src/main/java/com/ahmad/anchorbind/util/AnchorComboController.java
+          package com.ahmad.anchorbind.util;
+
+          import com.ahmad.anchorbind.config.AnchorBindConfig;
+          import net.minecraft.block.BlockState;
+          import net.minecraft.block.Blocks;
+          import net.minecraft.block.RespawnAnchorBlock;
+          import net.minecraft.client.MinecraftClient;
+          import net.minecraft.client.network.ClientPlayerEntity;
+          import net.minecraft.client.network.ClientPlayerInteractionManager;
+          import net.minecraft.client.world.ClientWorld;
+          import net.minecraft.entity.player.PlayerInventory;
+          import net.minecraft.item.ItemPlacementContext;
+          import net.minecraft.item.ItemStack;
+          import net.minecraft.item.Items;
+          import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
+          import net.minecraft.text.Text;
+          import net.minecraft.util.ActionResult;
+          import net.minecraft.util.Formatting;
+          import net.minecraft.util.Hand;
+          import net.minecraft.util.hit.BlockHitResult;
+          import net.minecraft.util.hit.HitResult;
+          import net.minecraft.util.math.BlockPos;
+          import net.minecraft.util.math.Direction;
+          import net.minecraft.util.math.Vec3d;
+
+          public final class AnchorComboController {
+
+              private enum Stage {
+                  IDLE,
+                  WAIT_FOR_ANCHOR_CONFIRED,
+                  CHARGE_GLOWSTONE,
+                  ACTIVATE_ANCHOR,
+                  RESTORE_SLOT
+              }
+
+              private static final int HOTBAR_SIZE = 9;
+              private static final int MAX_ANCHOR_CHARGES = 4;
+              private static final int CONFIRMATION_TIMEOUT_TICKS = 15;
+
+              private static final Text MSG_NO_ANCHOR = Text.translatable("text.anchorbind.no_anchor")
+                      .formatted(Formatting.RED);
+              private static final Text MSG_NO_GLOWSTONE = Text.translatable("text.anchorbind.no_glowstone")
+                      .formatted(Formatting.RED);
+
+              private static Stage currentStage = Stage.IDLE;
+              private static int savedOriginalSlot = -1;
+              private static int anchorSlotIndex = -1;
+              private static BlockPos placedAnchorPos = null;
+              private static Direction interactionSide = Direction.UP;
+              private static int targetGlowstoneCount = 1;
+              private static int glowstoneUsedCount = 0;
+              private static int stepDelayTicksRemaining = 0;
+              private static int waitTimeoutTicks = 0;
+              private static ClientWorld activeWorld = null;
+
+              private AnchorComboController() {
+              }
+
+              public static boolean isRunning() {
+                  return currentStage != Stage.IDLE;
+              }
+
+              public static void startCombo(MinecraftClient client) {
+                  if (!isValidEnvironment(client)) {
+                      return;
+                  }
+
+                  ClientPlayerEntity player = client.player;
+                  ClientPlayerInteractionManager interactionManager = client.interactionManager;
+                  ClientWorld world = client.world;
+                  PlayerInventory inventory = player.getInventory();
+
+                  int foundAnchorSlot = findHotbarSlot(inventory, Items.RESPAWN_ANCHOR);
+                  if (foundAnchorSlot == -1) {
+                      player.sendMessage(MSG_NO_ANCHOR, true);
+                      return;
+                  }
+
+                  int configuredGlowstone = AnchorBindConfig.getGlowstoneCount();
+                  int foundGlowstoneSlot = findHotbarSlotWithMinCount(inventory, Items.GLOWSTONE, 1);
+                  if (foundGlowstoneSlot == -1) {
+                      player.sendMessage(MSG_NO_GLOWSTONE, true);
+                      return;
+                  }
+
+                  HitResult hitResult = client.crosshairTarget;
+                  if (!(hitResult instanceof BlockHitResult blockHit) || hitResult.getType() != HitResult.Type.BLOCK) {
+                      return;
+                  }
+
+                  BlockPos targetPos = resolveAnchorPlacementPos(world, player, blockHit, inventory.getStack(foundAnchorSlot));
+                  if (targetPos == null) {
+                      return;
+                  }
+
+                  savedOriginalSlot = inventory.getSelectedSlot();
+                  anchorSlotIndex = foundAnchorSlot;
+                  placedAnchorPos = targetPos.toImmutable();
+                  interactionSide = blockHit.getSide();
+                  targetGlowstoneCount = Math.max(1, Math.min(3, configuredGlowstone));
+                  glowstoneUsedCount = 0;
+                  activeWorld = world;
+                  waitTimeoutTicks = 0;
+
+                  int stepDelay = computeStepDelayTicks();
+
+                  BlockState existingState = world.getBlockState(placedAnchorPos);
+                  if (existingState.isOf(Blocks.RESPAWN_ANCHOR)) {
+                      currentStage = Stage.CHARGE_GLOWSTONE;
+                      stepDelayTicksRemaining = Math.max(1, stepDelay);
+                      return;
+                  }
+
+                  selectSlotAndSync(player, foundAnchorSlot);
+
+                  ActionResult placeResult = interactionManager.interactBlock(player, Hand.MAIN_HAND, blockHit);
+                  if (!placeResult.isAccepted()) {
+                      finishOrAbort(client, true);
+                      return;
+                  }
+
+                  if (placeResult instanceof ActionResult.Success success && success.swingSource() == ActionResult.SwingSource.CLIENT) {
+                      player.swingHand(Hand.MAIN_HAND);
+                  }
+
+                  currentStage = Stage.WAIT_FOR_ANCHOR_CONFIRED;
+                  stepDelayTicksRemaining = stepDelay;
+                  waitTimeoutTicks = CONFIRMATION_TIMEOUT_TICKS;
+              }
+
+              public static void tick(MinecraftClient client) {
+                  if (currentStage == Stage.IDLE) {
+                      return;
+                  }
+
+                  if (!isValidEnvironment(client) || client.world != activeWorld || placedAnchorPos == null) {
+                      cancelAndReset(client);
+                      return;
+                  }
+
+                  ClientPlayerEntity player = client.player;
+                  ClientPlayerInteractionManager interactionManager = client.interactionManager;
+                  ClientWorld world = client.world;
+                  PlayerInventory inventory = player.getInventory();
+
+                  if (player.squaredDistanceTo(Vec3d.ofCenter(placedAnchorPos)) > 36.0D) {
+                      finishOrAbort(client, true);
+                      return;
+                  }
+
+                  switch (currentStage) {
+                      case WAIT_FOR_ANCHOR_CONFIRED -> {
+                          if (stepDelayTicksRemaining > 0) {
+                              stepDelayTicksRemaining--;
+                          }
+
+                          BlockState state = world.getBlockState(placedAnchorPos);
+                          if (state.isOf(Blocks.RESPAWN_ANCHOR)) {
+                              if (stepDelayTicksRemaining <= 0) {
+                                  currentStage = Stage.CHARGE_GLOWSTONE;
+                                  waitTimeoutTicks = CONFIRMATION_TIMEOUT_TICKS;
+                              }
+                          } else {
+                              waitTimeoutTicks--;
+                              if (waitTimeoutTicks <= 0) {
+                                  finishOrAbort(client, true);
+                              }
+                          }
+                      }
+
+                      case CHARGE_GLOWSTONE -> {
+                          if (stepDelayTicksRemaining > 0) {
+                              stepDelayTicksRemaining--;
+                              return;
+                          }
+
+                          BlockState state = world.getBlockState(placedAnchorPos);
+                          if (!state.isOf(Blocks.RESPAWN_ANCHOR)) {
+                              finishOrAbort(client, true);
+                              return;
+                          }
+
+                          int currentCharges = state.get(RespawnAnchorBlock.CHARGES);
+
+                          if (glowstoneUsedCount >= targetGlowstoneCount || currentCharges >= MAX_ANCHOR_CHARGES) {
+                              if (currentCharges > 0) {
+                                  currentStage = Stage.ACTIVATE_ANCHOR;
+                                  stepDelayTicksRemaining = Math.max(1, computeStepDelayTicks());
+                                  waitTimeoutTicks = CONFIRMATION_TIMEOUT_TICKS;
+                              } else {
+                                  finishOrAbort(client, true);
+                              }
+                              return;
+                          }
+
+                          int glowstoneSlot = findHotbarSlotWithMinCount(inventory, Items.GLOWSTONE, 1);
+                          if (glowstoneSlot == -1) {
+                              player.sendMessage(MSG_NO_GLOWSTONE, true);
+                              if (currentCharges > 0) {
+                                  currentStage = Stage.ACTIVATE_ANCHOR;
+                                  stepDelayTicksRemaining = Math.max(1, computeStepDelayTicks());
+                              } else {
+                                  finishOrAbort(client, true);
+                              }
+                              return;
+                          }
+
+                          selectSlotAndSync(player, glowstoneSlot);
+
+                          BlockHitResult anchorHit = createBlockHitResult(placedAnchorPos, interactionSide);
+                          ActionResult chargeResult = interactionManager.interactBlock(player, Hand.MAIN_HAND, anchorHit);
+
+                          if (!chargeResult.isAccepted()) {
+                              finishOrAbort(client, true);
+                              return;
+                          }
+
+                          if (chargeResult instanceof ActionResult.Success success && success.swingSource() == ActionResult.SwingSource.CLIENT) {
+                              player.swingHand(Hand.MAIN_HAND);
+                          }
+
+                          glowstoneUsedCount++;
+
+                          if (glowstoneUsedCount < targetGlowstoneCount && (currentCharges + 1) < MAX_ANCHOR_CHARGES) {
+                              stepDelayTicksRemaining = Math.max(1, computeStepDelayTicks());
+                          } else {
+                              currentStage = Stage.ACTIVATE_ANCHOR;
+                              stepDelayTicksRemaining = Math.max(1, computeStepDelayTicks());
+                              waitTimeoutTicks = CONFIRMATION_TIMEOUT_TICKS;
+                          }
+                      }
+
+                      case ACTIVATE_ANCHOR -> {
+                          if (stepDelayTicksRemaining > 0) {
+                              stepDelayTicksRemaining--;
+                              return;
+                          }
+
+                          BlockState state = world.getBlockState(placedAnchorPos);
+                          if (!state.isOf(Blocks.RESPAWN_ANCHOR)) {
+                              finishOrAbort(client, true);
+                              return;
+                          }
+
+                          int charges = state.get(RespawnAnchorBlock.CHARGES);
+                          if (charges <= 0) {
+                              waitTimeoutTicks--;
+                              if (waitTimeoutTicks <= 0) {
+                                  finishOrAbort(client, true);
+                              }
+                              return;
+                          }
+
+                          int activationSlot = resolveActivationSlot(inventory);
+                          selectSlotAndSync(player, activationSlot);
+
+                          BlockHitResult activateHit = createBlockHitResult(placedAnchorPos, interactionSide);
+                          ActionResult activateResult = interactionManager.interactBlock(player, Hand.MAIN_HAND, activateHit);
+
+                          if (activateResult instanceof ActionResult.Success success && success.swingSource() == ActionResult.SwingSource.CLIENT) {
+                              player.swingHand(Hand.MAIN_HAND);
+                          }
+
+                          if (AnchorBindConfig.isRestorePreviousSlot()) {
+                              currentStage = Stage.RESTORE_SLOT;
+                              stepDelayTicksRemaining = 1;
+                          } else {
+                              resetState();
+                          }
+                      }
+
+                      case RESTORE_SLOT -> {
+                          if (stepDelayTicksRemaining > 0) {
+                              stepDelayTicksRemaining--;
+                              return;
+                          }
+                          finishOrAbort(client, true);
+                      }
+
+                      default -> resetState();
+                  }
+              }
+
+              public static void cancelAndReset(MinecraftClient client) {
+                  finishOrAbort(client, AnchorBindConfig.isRestorePreviousSlot());
+              }
+
+              private static void finishOrAbort(MinecraftClient client, boolean restoreSlot) {
+                  if (restoreSlot
+                          && AnchorBindConfig.isRestorePreviousSlot()
+                          && client != null
+                          && client.player != null
+                          && PlayerInventory.isValidHotbarIndex(savedOriginalSlot)) {
+                      selectSlotAndSync(client.player, savedOriginalSlot);
+                  }
+                  resetState();
+              }
+
+              private static void resetState() {
+                  currentStage = Stage.IDLE;
+                  savedOriginalSlot = -1;
+                  anchorSlotIndex = -1;
+                  placedAnchorPos = null;
+                  glowstoneUsedCount = 0;
+                  stepDelayTicksRemaining = 0;
+                  waitTimeoutTicks = 0;
+                  activeWorld = null;
+              }
+
+              private static int computeStepDelayTicks() {
+                  double speedSeconds = AnchorBindConfig.getComboSpeedSeconds();
+                  int totalTicksBudget = (int) Math.round(speedSeconds * 20.0D);
+                  int transitions = Math.max(2, targetGlowstoneCount + 1);
+                  return Math.max(1, totalTicksBudget / transitions);
+              }
+
+              private static int resolveActivationSlot(PlayerInventory inventory) {
+                  int currentAnchorSlot = findHotbarSlot(inventory, Items.RESPAWN_ANCHOR);
+                  if (currentAnchorSlot != -1) {
+                      return currentAnchorSlot;
+                  }
+                  if (PlayerInventory.isValidHotbarIndex(anchorSlotIndex)
+                          && !inventory.getStack(anchorSlotIndex).isOf(Items.GLOWSTONE)) {
+                      return anchorSlotIndex;
+                  }
+                  if (PlayerInventory.isValidHotbarIndex(savedOriginalSlot)
+                          && !inventory.getStack(savedOriginalSlot).isOf(Items.GLOWSTONE)) {
+                      return savedOriginalSlot;
+                  }
+                  for (int i = 0; i < HOTBAR_SIZE; i++) {
+                      if (!inventory.getStack(i).isOf(Items.GLOWSTONE)) {
+                          return i;
+                      }
+                  }
+                  return PlayerInventory.isValidHotbarIndex(anchorSlotIndex) ? anchorSlotIndex : 0;
+              }
+
+              private static BlockPos resolveAnchorPlacementPos(
+                      ClientWorld world,
+                      ClientPlayerEntity player,
+                      BlockHitResult blockHit,
+                      ItemStack anchorStack
+              ) {
+                  BlockPos clickedPos = blockHit.getBlockPos();
+                  BlockState clickedState = world.getBlockState(clickedPos);
+
+                  if (clickedState.isOf(Blocks.RESPAWN_ANCHOR) && clickedState.get(RespawnAnchorBlock.CHARGES) == 0) {
+                      return clickedPos;
+                  }
+
+                  ItemPlacementContext placementContext = new ItemPlacementContext(player, Hand.MAIN_HAND, anchorStack, blockHit);
+                  if (!placementContext.canPlace()) {
+                      return null;
+                  }
+                  return placementContext.getBlockPos();
+              }
+
+              private static BlockHitResult createBlockHitResult(BlockPos pos, Direction side) {
+                  Direction safeSide = (side != null) ? side : Direction.UP;
+                  Vec3d hitVec = Vec3d.ofCenter(pos).add(
+                          safeSide.getOffsetX() * 0.5D,
+                          safeSide.getOffsetY() * 0.5D,
+                          safeSide.getOffsetZ() * 0.5D
+                  );
+                  return new BlockHitResult(hitVec, safeSide, pos, false);
+              }
+
+              private static void selectSlotAndSync(ClientPlayerEntity player, int slot) {
+                  if (!PlayerInventory.isValidHotbarIndex(slot)) {
+                      return;
+                  }
+                  PlayerInventory inventory = player.getInventory();
+                  if (inventory.getSelectedSlot() != slot) {
+                      inventory.setSelectedSlot(slot);
+                      if (player.networkHandler != null) {
+                          player.networkHandler.sendPacket(new UpdateSelectedSlotC2SPacket(slot));
+                      }
+                  }
+              }
+
+              private static int findHotbarSlot(PlayerInventory inventory, net.minecraft.item.Item targetItem) {
+                  int selected = inventory.getSelectedSlot();
+                  if (PlayerInventory.isValidHotbarIndex(selected) && inventory.getStack(selected).isOf(targetItem)) {
+                      return selected;
+                  }
+                  for (int i = 0; i < HOTBAR_SIZE; i++) {
+                      if (inventory.getStack(i).isOf(targetItem)) {
+                          return i;
+                      }
+                  }
+                  return -1;
+              }
+
+              private static int findHotbarSlotWithMinCount(PlayerInventory inventory, net.minecraft.item.Item targetItem, int minCount) {
+                  for (int i = 0; i < HOTBAR_SIZE; i++) {
+                      ItemStack stack = inventory.getStack(i);
+                      if (stack.isOf(targetItem) && stack.getCount() >= minCount) {
+                          return i;
+                      }
+                  }
+                  return -1;
+              }
+
+              private static boolean isValidEnvironment(MinecraftClient client) {
+                  return client != null
+                          && client.player != null
+                          && client.world != null
+                          && client.interactionManager != null
+                          && client.currentScreen == null
+                          && !client.player.isSpectator()
+                          && !client.player.isDead();
+              }
+          }
+          EOF
+
+          cat << 'EOF' > src/main/java/com/ahmad/anchorbind/config/AnchorBindConfig.java
+          package com.ahmad.anchorbind.config;
+
+          import com.ahmad.anchorbind.AnchorBindClient;
+          import net.fabricmc.loader.api.FabricLoader;
+
+          import java.io.IOException;
+          import java.io.InputStream;
+          import java.io.OutputStream;
+          import java.nio.file.Files;
+          import java.nio.file.Path;
+          import java.util.Locale;
+          import java.util.Properties;
+
+          public final class AnchorBindConfig {
+              private static final String CONFIG_FILE_NAME = "anchorbind.properties";
+
+              private static final String KEY_ENABLED = "enabled";
+              private static final String KEY_COMBO_SPEED = "combo_speed_seconds";
+              private static final String KEY_GLOWSTONE_COUNT = "glowstone_count";
+              private static final String KEY_RESTORE_SLOT = "restore_previous_slot";
+
+              public static final double MIN_SPEED_SECONDS = 0.1D;
+              public static final double MAX_SPEED_SECONDS = 3.0D;
+              public static final double DEFAULT_SPEED_SECONDS = 1.0D;
+
+              private static boolean enabled = true;
+              private static double comboSpeedSeconds = DEFAULT_SPEED_SECONDS;
+              private static int glowstoneCount = 1;
+              private static boolean restorePreviousSlot = true;
+
+              private AnchorBindConfig() {
+              }
+
+              public static boolean isEnabled() {
+                  return enabled;
+              }
+
+              public static void setEnabled(boolean value) {
+                  enabled = value;
+                  save();
+              }
+
+              public static void toggleEnabled() {
+                  setEnabled(!enabled);
+              }
+
+              public static double getComboSpeedSeconds() {
+                  return comboSpeedSeconds;
+              }
+
+              public static void setComboSpeedSeconds(double value) {
+                  double clamped = Math.max(MIN_SPEED_SECONDS, Math.min(MAX_SPEED_SECONDS, value));
+                  comboSpeedSeconds = Math.round(clamped * 10.0D) / 10.0D;
+                  save();
+              }
+
+              public static int getGlowstoneCount() {
+                  return glowstoneCount;
+              }
+
+              public static void setGlowstoneCount(int count) {
+                  glowstoneCount = Math.max(1, Math.min(3, count));
+                  save();
+              }
+
+              public static void cycleGlowstoneCount() {
+                  int next = (glowstoneCount % 3) + 1;
+                  setGlowstoneCount(next);
+              }
+
+              public static boolean isRestorePreviousSlot() {
+                  return restorePreviousSlot;
+              }
+
+              public static void toggleRestorePreviousSlot() {
+                  restorePreviousSlot = !restorePreviousSlot;
+                  save();
+              }
+
+              private static Path getConfigPath() {
+                  return FabricLoader.getInstance().getConfigDir().resolve(CONFIG_FILE_NAME);
+              }
+
+              public static void load() {
+                  Path path = getConfigPath();
+                  if (!Files.exists(path)) {
+                      save();
+                      return;
+                  }
+
+                  Properties props = new Properties();
+                  try (InputStream in = Files.newInputStream(path)) {
+                      props.load(in);
+                      enabled = parseBoolean(props.getProperty(KEY_ENABLED), true);
+                      comboSpeedSeconds = parseDouble(props.getProperty(KEY_COMBO_SPEED), DEFAULT_SPEED_SECONDS, MIN_SPEED_SECONDS, MAX_SPEED_SECONDS);
+                      glowstoneCount = parseInt(props.getProperty(KEY_GLOWSTONE_COUNT), 1, 1, 3);
+                      restorePreviousSlot = parseBoolean(props.getProperty(KEY_RESTORE_SLOT), true);
+                  } catch (IOException | IllegalArgumentException e) {
+                      AnchorBindClient.LOGGER.warn("Failed to read {}; using defaults.", CONFIG_FILE_NAME, e);
+                  }
+              }
+
+              public static void save() {
+                  Path path = getConfigPath();
+                  Properties props = new Properties();
+                  props.setProperty(KEY_ENABLED, Boolean.toString(enabled));
+                  props.setProperty(KEY_COMBO_SPEED, String.format(Locale.ROOT, "%.1f", comboSpeedSeconds));
+                  props.setProperty(KEY_GLOWSTONE_COUNT, Integer.toString(glowstoneCount));
+                  props.setProperty(KEY_RESTORE_SLOT, Boolean.toString(restorePreviousSlot));
+
+                  try {
+                      Files.createDirectories(path.getParent());
+                      try (OutputStream out = Files.newOutputStream(path)) {
+                          props.store(out, "Anchor Bind Configuration (Minecraft 1.21.11) - Credit: Ahmad");
+                      }
+                  } catch (IOException e) {
+                      AnchorBindClient.LOGGER.warn("Failed to save {}.", CONFIG_FILE_NAME, e);
+                  }
+              }
+
+              private static boolean parseBoolean(String raw, boolean fallback) {
+                  if (raw == null) {
+                      return fallback;
+                  }
+                  String trimmed = raw.trim();
+                  if ("true".equalsIgnoreCase(trimmed)) {
+                      return true;
+                  }
+                  if ("false".equalsIgnoreCase(trimmed)) {
+                      return false;
+                  }
+                  return fallback;
+              }
+
+              private static int parseInt(String raw, int fallback, int min, int max) {
+                  if (raw == null) {
+                      return fallback;
+                  }
+                  try {
+                      int val = Integer.parseInt(raw.trim());
+                      return Math.max(min, Math.min(max, val));
+                  } catch (NumberFormatException e) {
+                      return fallback;
+                  }
+              }
+
+              private static double parseDouble(String raw, double fallback, double min, double max) {
+                  if (raw == null) {
+                      return fallback;
+                  }
+                  try {
+                      double val = Double.parseDouble(raw.trim());
+                      double clamped = Math.max(min, Math.min(max, val));
+                      return Math.round(clamped * 10.0D) / 10.0D;
+                  } catch (NumberFormatException e) {
+                      return fallback;
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > src/main/java/com/ahmad/anchorbind/config/AnchorBindConfigScreen.java
+          package com.ahmad.anchorbind.config;
+
+          import com.ahmad.anchorbind.AnchorBindClient;
+          import net.minecraft.client.gui.DrawContext;
+          import net.minecraft.client.gui.screen.Screen;
+          import net.minecraft.client.gui.screen.option.KeybindsScreen;
+          import net.minecraft.client.gui.widget.ButtonWidget;
+          import net.minecraft.client.gui.widget.SliderWidget;
+          import net.minecraft.client.option.KeyBinding;
+          import net.minecraft.screen.ScreenTexts;
+          import net.minecraft.text.Text;
+          import net.minecraft.util.Formatting;
+
+          import java.util.Locale;
+
+          public final class AnchorBindConfigScreen extends Screen {
+              private final Screen parent;
+
+              public AnchorBindConfigScreen(Screen parent) {
+                  super(Text.translatable("screen.anchorbind.config.title"));
+                  this.parent = parent;
+              }
+
+              @Override
+              protected void init() {
+                  int buttonWidth = 220;
+                  int buttonHeight = 20;
+                  int centerX = this.width / 2 - buttonWidth / 2;
+                  int startY = this.height / 2 - 58;
+
+                  this.addDrawableChild(ButtonWidget.builder(getEnabledText(), button -> {
+                      AnchorBindConfig.toggleEnabled();
+                      button.setMessage(getEnabledText());
+                  }).dimensions(centerX, startY, buttonWidth, buttonHeight).build());
+
+                  this.addDrawableChild(new ComboSpeedSlider(
+                          centerX,
+                          startY + 24,
+                          buttonWidth,
+                          buttonHeight,
+                          AnchorBindConfig.getComboSpeedSeconds()
+                  ));
+
+                  this.addDrawableChild(ButtonWidget.builder(getGlowstoneCountText(), button -> {
+                      AnchorBindConfig.cycleGlowstoneCount();
+                      button.setMessage(getGlowstoneCountText());
+                  }).dimensions(centerX, startY + 48, buttonWidth, buttonHeight).build());
+
+                  this.addDrawableChild(ButtonWidget.builder(getRestoreSlotText(), button -> {
+                      AnchorBindConfig.toggleRestorePreviousSlot();
+                      button.setMessage(getRestoreSlotText());
+                  }).dimensions(centerX, startY + 72, buttonWidth, buttonHeight).build());
+
+                  KeyBinding kb = AnchorBindClient.getAnchorComboKeyBinding();
+                  Text keyName = kb != null ? kb.getBoundKeyLocalizedText() : Text.literal("V");
+                  this.addDrawableChild(ButtonWidget.builder(
+                          Text.translatable("screen.anchorbind.config.open_controls", keyName),
+                          button -> {
+                              if (this.client != null) {
+                                  this.client.setScreen(new KeybindsScreen(this, this.client.options));
+                              }
+                          }
+                  ).dimensions(centerX, startY + 96, buttonWidth, buttonHeight).build());
+
+                  this.addDrawableChild(ButtonWidget.builder(ScreenTexts.DONE, button -> close())
+                          .dimensions(centerX, startY + 128, buttonWidth, buttonHeight)
+                          .build());
+              }
+
+              private static Text getEnabledText() {
+                  if (AnchorBindConfig.isEnabled()) {
+                      return Text.translatable("screen.anchorbind.config.enabled_on").formatted(Formatting.GREEN);
+                  }
+                  return Text.translatable("screen.anchorbind.config.enabled_off").formatted(Formatting.RED);
+              }
+
+              private static Text getGlowstoneCountText() {
+                  return Text.translatable(
+                          "screen.anchorbind.config.glowstone_count",
+                          Integer.toString(AnchorBindConfig.getGlowstoneCount())
+                  );
+              }
+
+              private static Text getRestoreSlotText() {
+                  if (AnchorBindConfig.isRestorePreviousSlot()) {
+                      return Text.translatable("screen.anchorbind.config.restore_slot_on").formatted(Formatting.GREEN);
+                  }
+                  return Text.translatable("screen.anchorbind.config.restore_slot_off").formatted(Formatting.RED);
+              }
+
+              @Override
+              public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+                  super.render(context, mouseX, mouseY, delta);
+
+                  int centerX = this.width / 2;
+                  int titleY = this.height / 2 - 84;
+
+                  context.drawCenteredTextWithShadow(this.textRenderer, this.title, centerX, titleY, 0xFFFFFF);
+
+                  Text credit = Text.translatable("screen.anchorbind.config.credit").formatted(Formatting.DARK_GRAY);
+                  context.drawCenteredTextWithShadow(this.textRenderer, credit, centerX, this.height - 16, 0x808080);
+              }
+
+              @Override
+              public void close() {
+                  AnchorBindConfig.save();
+                  if (this.client != null) {
+                      this.client.setScreen(this.parent);
+                  }
+              }
+
+              private static final class ComboSpeedSlider extends SliderWidget {
+
+                  ComboSpeedSlider(int x, int y, int width, int height, double currentSeconds) {
+                      super(x, y, width, height, Text.empty(), toNormalizedValue(currentSeconds));
+                      this.updateMessage();
+                  }
+
+                  private static double toNormalizedValue(double seconds) {
+                      double clamped = Math.max(AnchorBindConfig.MIN_SPEED_SECONDS, Math.min(AnchorBindConfig.MAX_SPEED_SECONDS, seconds));
+                      return (clamped - AnchorBindConfig.MIN_SPEED_SECONDS)
+                              / (AnchorBindConfig.MAX_SPEED_SECONDS - AnchorBindConfig.MIN_SPEED_SECONDS);
+                  }
+
+                  private double toSeconds() {
+                      double raw = AnchorBindConfig.MIN_SPEED_SECONDS
+                              + this.value * (AnchorBindConfig.MAX_SPEED_SECONDS - AnchorBindConfig.MIN_SPEED_SECONDS);
+                      return Math.round(raw * 10.0D) / 10.0D;
+                  }
+
+                  @Override
+                  protected void updateMessage() {
+                      String formatted = String.format(Locale.ROOT, "%.1f", toSeconds());
+                      this.setMessage(Text.translatable("screen.anchorbind.config.combo_speed", formatted));
+                  }
+
+                  @Override
+                  protected void applyValue() {
+                      AnchorBindConfig.setComboSpeedSeconds(toSeconds());
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > src/main/java/com/ahmad/anchorbind/config/ModMenuIntegration.java
+          package com.ahmad.anchorbind.config;
+
+          import com.terraformersmc.modmenu.api.ConfigScreenFactory;
+          import com.terraformersmc.modmenu.api.ModMenuApi;
+
+          public final class ModMenuIntegration implements ModMenuApi {
+              @Override
+              public ConfigScreenFactory<?> getModConfigScreenFactory() {
+                  return AnchorBindConfigScreen::new;
+              }
+          }
+          EOF
+
+          for f in settings.gradle gradle.properties build.gradle src/main/resources/fabric.mod.json src/main/resources/assets/anchorbind/lang/en_us.json $(find src -name "*.java"); do
+            sed -i 's/^          //' "$f"
+          done
+
+          zip -r anchor-bind-src.zip settings.gradle gradle.properties build.gradle src/
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle 9.2.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.2.1'
+
+      - name: Build Mod with Gradle
+        run: gradle build
+
+      - name: Upload Compiled Mod JAR and Source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: anchor-bind-1.21.11-release
+          path: |
+            build/libs/*.jar
+            !build/libs/*-sources.jar
+            anchor-bind-src.zip
