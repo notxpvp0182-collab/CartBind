@@ -1,4 +1,4 @@
-name: Build Anchor Bind JAR
+name: Build Cart Bind JAR
 
 on:
   push:
@@ -10,9 +10,9 @@ jobs:
     steps:
       - name: Generate Project Files
         run: |
-          mkdir -p src/main/java/com/ahmad/anchorbind/config
-          mkdir -p src/main/java/com/ahmad/anchorbind/util
-          mkdir -p src/main/resources/assets/anchorbind/lang
+          mkdir -p src/main/java/com/ahmad/cartbind/config
+          mkdir -p src/main/java/com/ahmad/cartbind/util
+          mkdir -p src/main/resources/assets/cartbind/lang
 
           cat << 'EOF' > settings.gradle
           pluginManagement {
@@ -25,7 +25,7 @@ jobs:
                   gradlePluginPortal()
               }
           }
-          rootProject.name = 'anchor-bind'
+          rootProject.name = 'cart-bind'
           EOF
 
           cat << 'EOF' > gradle.properties
@@ -38,8 +38,8 @@ jobs:
           fabric_version=0.141.6+1.21.11
           modmenu_version=17.0.1
           mod_version=1.0.0
-          maven_group=com.ahmad.anchorbind
-          archives_base_name=anchor-bind
+          maven_group=com.ahmad.cartbind
+          archives_base_name=CartBind
           EOF
 
           cat << 'EOF' > build.gradle
@@ -94,16 +94,16 @@ jobs:
           cat << 'EOF' > src/main/resources/fabric.mod.json
           {
             "schemaVersion": 1,
-            "id": "anchorbind",
+            "id": "cartbind",
             "version": "${version}",
-            "name": "Anchor Bind",
-            "description": "Lightweight Crystal & Anchor PvP utility mod that places, charges, and activates a Respawn Anchor with a single keybind. Credit: Ahmad.",
+            "name": "Cart Bind",
+            "description": "Lightweight PvP utility mod that automatically places a Rail (when needed) and one TNT Minecart with a single configurable keybind. Credit: Ahmad.",
             "authors": ["Ahmad"],
             "license": "MIT",
             "environment": "client",
             "entrypoints": {
-              "client": ["com.ahmad.anchorbind.AnchorBindClient"],
-              "modmenu": ["com.ahmad.anchorbind.config.ModMenuIntegration"]
+              "client": ["com.ahmad.cartbind.CartBindClient"],
+              "modmenu": ["com.ahmad.cartbind.config.ModMenuIntegration"]
             },
             "depends": {
               "fabricloader": "*",
@@ -117,29 +117,31 @@ jobs:
           }
           EOF
 
-          cat << 'EOF' > src/main/resources/assets/anchorbind/lang/en_us.json
+          cat << 'EOF' > src/main/resources/assets/cartbind/lang/en_us.json
           {
-            "key.category.anchorbind.general": "Anchor Bind",
-            "key.anchorbind.execute_combo": "Anchor Bind: Execute Anchor Combo",
-            "text.anchorbind.no_anchor": "No Respawn Anchor!",
-            "text.anchorbind.no_glowstone": "No Glowstone!",
-            "screen.anchorbind.config.title": "Anchor Bind",
-            "screen.anchorbind.config.enabled_on": "Enable Mod: ON",
-            "screen.anchorbind.config.enabled_off": "Enable Mod: OFF",
-            "screen.anchorbind.config.combo_speed": "Combo Speed: %s s",
-            "screen.anchorbind.config.glowstone_count": "Glowstone Count: %s",
-            "screen.anchorbind.config.restore_slot_on": "Restore Previous Slot: ON",
-            "screen.anchorbind.config.restore_slot_off": "Restore Previous Slot: OFF",
-            "screen.anchorbind.config.open_controls": "Configure Keybind (%s)...",
-            "screen.anchorbind.config.credit": "Created by Ahmad | Minecraft 1.21.11"
+            "key.category.cartbind.general": "Cart Bind",
+            "key.cartbind.place_cart": "Cart Bind: Auto Rail + TNT Minecart",
+            "text.cartbind.no_rail": "No Rail!",
+            "text.cartbind.no_tnt_minecart": "No TNT Minecart!",
+            "screen.cartbind.config.title": "Cart Bind",
+            "screen.cartbind.config.enabled_on": "Enable Mod: ON",
+            "screen.cartbind.config.enabled_off": "Enable Mod: OFF",
+            "screen.cartbind.config.placement_speed": "Placement Speed: %s s",
+            "screen.cartbind.config.rail_pref_standard": "Rail Preference: Standard Rail First",
+            "screen.cartbind.config.rail_pref_any": "Rail Preference: Any Suitable Rail",
+            "screen.cartbind.config.restore_slot_on": "Restore Previous Slot: ON",
+            "screen.cartbind.config.restore_slot_off": "Restore Previous Slot: OFF",
+            "screen.cartbind.config.open_controls": "Keybind (%s) - Open Controls...",
+            "screen.cartbind.config.reset_defaults": "Reset Settings to Defaults",
+            "screen.cartbind.config.credit": "Created by Ahmad | Minecraft 1.21.11"
           }
           EOF
 
-          cat << 'EOF' > src/main/java/com/ahmad/anchorbind/AnchorBindClient.java
-          package com.ahmad.anchorbind;
+          cat << 'EOF' > src/main/java/com/ahmad/cartbind/CartBindClient.java
+          package com.ahmad.cartbind;
 
-          import com.ahmad.anchorbind.config.AnchorBindConfig;
-          import com.ahmad.anchorbind.util.AnchorComboController;
+          import com.ahmad.cartbind.config.CartBindConfig;
+          import com.ahmad.cartbind.util.CartPlacementController;
           import net.fabricmc.api.ClientModInitializer;
           import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
           import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -150,78 +152,159 @@ jobs:
           import org.slf4j.Logger;
           import org.slf4j.LoggerFactory;
 
-          public final class AnchorBindClient implements ClientModInitializer {
-              public static final String MOD_ID = "anchorbind";
+          public final class CartBindClient implements ClientModInitializer {
+              public static final String MOD_ID = "cartbind";
               public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
               public static final KeyBinding.Category KEY_CATEGORY = KeyBinding.Category.create(
                       Identifier.of(MOD_ID, "general")
               );
 
-              private static KeyBinding anchorComboKeyBinding;
+              private static KeyBinding placeCartKeyBinding;
               private static boolean wasKeyHeld = false;
 
               @Override
               public void onInitializeClient() {
-                  AnchorBindConfig.load();
+                  CartBindConfig.load();
 
-                  anchorComboKeyBinding = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                          "key.anchorbind.execute_combo",
+                  placeCartKeyBinding = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                          "key.cartbind.place_cart",
                           InputUtil.Type.KEYSYM,
-                          GLFW.GLFW_KEY_V,
+                          GLFW.GLFW_KEY_G,
                           KEY_CATEGORY
                   ));
 
                   ClientTickEvents.END_CLIENT_TICK.register(client -> {
-                      if (anchorComboKeyBinding == null) {
+                      if (placeCartKeyBinding == null) {
                           return;
                       }
 
                       boolean pressedThisTick = false;
-                      while (anchorComboKeyBinding.wasPressed()) {
+                      while (placeCartKeyBinding.wasPressed()) {
                           pressedThisTick = true;
                       }
 
-                      boolean currentlyDown = anchorComboKeyBinding.isPressed();
+                      boolean currentlyDown = placeCartKeyBinding.isPressed();
 
-                      if (!AnchorBindConfig.isEnabled()) {
-                          if (AnchorComboController.isRunning()) {
-                              AnchorComboController.cancelAndReset(client);
+                      if (!CartBindConfig.isEnabled()) {
+                          if (CartPlacementController.isRunning()) {
+                              CartPlacementController.cancelAndReset(client);
                           }
                           wasKeyHeld = currentlyDown;
                           return;
                       }
 
-                      if (AnchorComboController.isRunning()) {
-                          AnchorComboController.tick(client);
+                      if (CartPlacementController.isRunning()) {
+                          CartPlacementController.tick(client);
                       }
 
                       if (pressedThisTick && !wasKeyHeld) {
                           wasKeyHeld = true;
-                          if (client.currentScreen == null && !AnchorComboController.isRunning()) {
-                              AnchorComboController.startCombo(client);
+                          if (client.currentScreen == null && !CartPlacementController.isRunning()) {
+                              CartPlacementController.startSequence(client);
                           }
                       } else if (!currentlyDown) {
                           wasKeyHeld = false;
                       }
                   });
 
-                  LOGGER.info("Anchor Bind (1.21.11) initialized. Credit: Ahmad");
+                  LOGGER.info("Cart Bind (1.21.11) initialized. Created by Ahmad.");
               }
 
-              public static KeyBinding getAnchorComboKeyBinding() {
-                  return anchorComboKeyBinding;
+              public static KeyBinding getPlaceCartKeyBinding() {
+                  return placeCartKeyBinding;
               }
           }
           EOF
 
-          cat << 'EOF' > src/main/java/com/ahmad/anchorbind/util/AnchorComboController.java
-          package com.ahmad.anchorbind.util;
+          cat << 'EOF' > src/main/java/com/ahmad/cartbind/util/HotbarDetector.java
+          package com.ahmad.cartbind.util;
 
-          import com.ahmad.anchorbind.config.AnchorBindConfig;
+          import com.ahmad.cartbind.config.CartBindConfig;
+          import net.minecraft.entity.player.PlayerInventory;
+          import net.minecraft.item.Item;
+          import net.minecraft.item.ItemStack;
+          import net.minecraft.item.Items;
+
+          public final class HotbarDetector {
+
+              public static final int HOTBAR_SIZE = 9;
+
+              private HotbarDetector() {
+              }
+
+              public static boolean isSupportedRailItem(Item item) {
+                  return item == Items.RAIL
+                          || item == Items.POWERED_RAIL
+                          || item == Items.DETECTOR_RAIL
+                          || item == Items.ACTIVATOR_RAIL;
+              }
+
+              public static int findRailSlot(PlayerInventory inventory, boolean preferStandard) {
+                  int currentSlot = inventory.getSelectedSlot();
+
+                  if (preferStandard) {
+                      if (PlayerInventory.isValidHotbarIndex(currentSlot)
+                              && inventory.getStack(currentSlot).isOf(Items.RAIL)) {
+                          return currentSlot;
+                      }
+                      for (int i = 0; i < HOTBAR_SIZE; i++) {
+                          if (inventory.getStack(i).isOf(Items.RAIL)) {
+                              return i;
+                          }
+                      }
+                  }
+
+                  if (PlayerInventory.isValidHotbarIndex(currentSlot)) {
+                      ItemStack currentStack = inventory.getStack(currentSlot);
+                      if (!currentStack.isEmpty() && isSupportedRailItem(currentStack.getItem())) {
+                          return currentSlot;
+                      }
+                  }
+
+                  for (int i = 0; i < HOTBAR_SIZE; i++) {
+                      ItemStack stack = inventory.getStack(i);
+                      if (!stack.isEmpty() && isSupportedRailItem(stack.getItem())) {
+                          return i;
+                      }
+                  }
+
+                  return -1;
+              }
+
+              public static int findRailSlot(PlayerInventory inventory) {
+                  return findRailSlot(
+                          inventory,
+                          CartBindConfig.getRailPreference() == CartBindConfig.RailPreference.STANDARD_FIRST
+                  );
+              }
+
+              public static int findTntMinecartSlot(PlayerInventory inventory) {
+                  int currentSlot = inventory.getSelectedSlot();
+                  if (PlayerInventory.isValidHotbarIndex(currentSlot)
+                          && inventory.getStack(currentSlot).isOf(Items.TNT_MINECART)) {
+                      return currentSlot;
+                  }
+
+                  for (int i = 0; i < HOTBAR_SIZE; i++) {
+                      ItemStack stack = inventory.getStack(i);
+                      if (!stack.isEmpty() && stack.isOf(Items.TNT_MINECART)) {
+                          return i;
+                      }
+                  }
+
+                  return -1;
+              }
+          }
+          EOF
+
+          cat << 'EOF' > src/main/java/com/ahmad/cartbind/util/CartPlacementController.java
+          package com.ahmad.cartbind.util;
+
+          import com.ahmad.cartbind.config.CartBindConfig;
+          import net.minecraft.block.AbstractRailBlock;
           import net.minecraft.block.BlockState;
           import net.minecraft.block.Blocks;
-          import net.minecraft.block.RespawnAnchorBlock;
           import net.minecraft.client.MinecraftClient;
           import net.minecraft.client.network.ClientPlayerEntity;
           import net.minecraft.client.network.ClientPlayerInteractionManager;
@@ -231,6 +314,7 @@ jobs:
           import net.minecraft.item.ItemStack;
           import net.minecraft.item.Items;
           import net.minecraft.network.packet.c2s.play.UpdateSelectedSlotC2SPacket;
+          import net.minecraft.registry.tag.BlockTags;
           import net.minecraft.text.Text;
           import net.minecraft.util.ActionResult;
           import net.minecraft.util.Formatting;
@@ -241,45 +325,58 @@ jobs:
           import net.minecraft.util.math.Direction;
           import net.minecraft.util.math.Vec3d;
 
-          public final class AnchorComboController {
+          public final class CartPlacementController {
 
-              private enum Stage {
+              public enum State {
                   IDLE,
-                  WAIT_FOR_ANCHOR_CONFIRED,
-                  CHARGE_GLOWSTONE,
-                  ACTIVATE_ANCHOR,
-                  RESTORE_SLOT
+                  VALIDATE,
+                  FIND_RAIL,
+                  PLACE_RAIL_IF_NEEDED,
+                  WAIT_FOR_RAIL_CONFIRMATION,
+                  FIND_TNT_MINECART,
+                  PLACE_MINECART,
+                  RESTORE_SLOT,
+                  COMPLETE,
+                  FAILED
               }
 
-              private static final int HOTBAR_SIZE = 9;
-              private static final int MAX_ANCHOR_CHARGES = 4;
-              private static final int CONFIRMATION_TIMEOUT_TICKS = 15;
+              private static final int RAIL_CONFIRM_TIMEOUT_TICKS = 15;
 
-              private static final Text MSG_NO_ANCHOR = Text.translatable("text.anchorbind.no_anchor")
+              private static final Text MSG_NO_RAIL = Text.translatable("text.cartbind.no_rail")
                       .formatted(Formatting.RED);
-              private static final Text MSG_NO_GLOWSTONE = Text.translatable("text.anchorbind.no_glowstone")
+              private static final Text MSG_NO_TNT_MINECART = Text.translatable("text.cartbind.no_tnt_minecart")
                       .formatted(Formatting.RED);
 
-              private static Stage currentStage = Stage.IDLE;
+              private static State currentState = State.IDLE;
               private static int savedOriginalSlot = -1;
-              private static int anchorSlotIndex = -1;
-              private static BlockPos placedAnchorPos = null;
-              private static Direction interactionSide = Direction.UP;
-              private static int targetGlowstoneCount = 1;
-              private static int glowstoneUsedCount = 0;
-              private static int stepDelayTicksRemaining = 0;
-              private static int waitTimeoutTicks = 0;
+              private static int detectedRailSlot = -1;
+              private static int detectedCartSlot = -1;
+              private static BlockHitResult initialBlockHit = null;
+              private static BlockPos targetRailPos = null;
+              private static boolean railAlreadyPresent = false;
+              private static int delayTicksRemaining = 0;
+              private static int confirmTimeoutTicks = 0;
               private static ClientWorld activeWorld = null;
 
-              private AnchorComboController() {
+              private CartPlacementController() {
               }
 
               public static boolean isRunning() {
-                  return currentStage != Stage.IDLE;
+                  return currentState != State.IDLE;
               }
 
-              public static void startCombo(MinecraftClient client) {
+              public static void startSequence(MinecraftClient client) {
+                  if (currentState != State.IDLE) {
+                      return;
+                  }
+
+                  currentState = State.VALIDATE;
+                  processImmediateValidateAndStart(client);
+              }
+
+              private static void processImmediateValidateAndStart(MinecraftClient client) {
                   if (!isValidEnvironment(client)) {
+                      resetToIdle();
                       return;
                   }
 
@@ -288,52 +385,65 @@ jobs:
                   ClientWorld world = client.world;
                   PlayerInventory inventory = player.getInventory();
 
-                  int foundAnchorSlot = findHotbarSlot(inventory, Items.RESPAWN_ANCHOR);
-                  if (foundAnchorSlot == -1) {
-                      player.sendMessage(MSG_NO_ANCHOR, true);
-                      return;
-                  }
-
-                  int configuredGlowstone = AnchorBindConfig.getGlowstoneCount();
-                  int foundGlowstoneSlot = findHotbarSlotWithMinCount(inventory, Items.GLOWSTONE, 1);
-                  if (foundGlowstoneSlot == -1) {
-                      player.sendMessage(MSG_NO_GLOWSTONE, true);
-                      return;
-                  }
-
                   HitResult hitResult = client.crosshairTarget;
                   if (!(hitResult instanceof BlockHitResult blockHit) || hitResult.getType() != HitResult.Type.BLOCK) {
-                      return;
-                  }
-
-                  BlockPos targetPos = resolveAnchorPlacementPos(world, player, blockHit, inventory.getStack(foundAnchorSlot));
-                  if (targetPos == null) {
+                      resetToIdle();
                       return;
                   }
 
                   savedOriginalSlot = inventory.getSelectedSlot();
-                  anchorSlotIndex = foundAnchorSlot;
-                  placedAnchorPos = targetPos.toImmutable();
-                  interactionSide = blockHit.getSide();
-                  targetGlowstoneCount = Math.max(1, Math.min(3, configuredGlowstone));
-                  glowstoneUsedCount = 0;
+                  initialBlockHit = blockHit;
                   activeWorld = world;
-                  waitTimeoutTicks = 0;
 
-                  int stepDelay = computeStepDelayTicks();
-
-                  BlockState existingState = world.getBlockState(placedAnchorPos);
-                  if (existingState.isOf(Blocks.RESPAWN_ANCHOR)) {
-                      currentStage = Stage.CHARGE_GLOWSTONE;
-                      stepDelayTicksRemaining = Math.max(1, stepDelay);
+                  int precheckCartSlot = HotbarDetector.findTntMinecartSlot(inventory);
+                  if (precheckCartSlot == -1) {
+                      player.sendMessage(MSG_NO_TNT_MINECART, true);
+                      resetToIdle();
                       return;
                   }
 
-                  selectSlotAndSync(player, foundAnchorSlot);
+                  BlockPos clickedPos = blockHit.getBlockPos();
+                  BlockState clickedState = world.getBlockState(clickedPos);
+
+                  if (isRailBlock(clickedState)) {
+                      railAlreadyPresent = true;
+                      targetRailPos = clickedPos.toImmutable();
+                      currentState = State.FIND_TNT_MINECART;
+                      delayTicksRemaining = computeStepDelayTicks(true);
+                      return;
+                  }
+
+                  currentState = State.FIND_RAIL;
+                  detectedRailSlot = HotbarDetector.findRailSlot(inventory);
+                  if (detectedRailSlot == -1) {
+                      player.sendMessage(MSG_NO_RAIL, true);
+                      resetToIdle();
+                      return;
+                  }
+
+                  currentState = State.PLACE_RAIL_IF_NEEDED;
+                  ItemStack railStack = inventory.getStack(detectedRailSlot);
+                  BlockPos placementPos = resolveValidRailPlacementPos(world, player, blockHit, railStack);
+                  if (placementPos == null) {
+                      resetToIdle();
+                      return;
+                  }
+
+                  targetRailPos = placementPos.toImmutable();
+                  railAlreadyPresent = false;
+
+                  if (isRailBlock(world.getBlockState(targetRailPos))) {
+                      railAlreadyPresent = true;
+                      currentState = State.FIND_TNT_MINECART;
+                      delayTicksRemaining = computeStepDelayTicks(true);
+                      return;
+                  }
+
+                  selectSlotAndSync(player, detectedRailSlot);
 
                   ActionResult placeResult = interactionManager.interactBlock(player, Hand.MAIN_HAND, blockHit);
                   if (!placeResult.isAccepted()) {
-                      finishOrAbort(client, true);
+                      failAndCleanup(client);
                       return;
                   }
 
@@ -341,17 +451,17 @@ jobs:
                       player.swingHand(Hand.MAIN_HAND);
                   }
 
-                  currentStage = Stage.WAIT_FOR_ANCHOR_CONFIRED;
-                  stepDelayTicksRemaining = stepDelay;
-                  waitTimeoutTicks = CONFIRMATION_TIMEOUT_TICKS;
+                  currentState = State.WAIT_FOR_RAIL_CONFIRMATION;
+                  delayTicksRemaining = computeStepDelayTicks(false);
+                  confirmTimeoutTicks = RAIL_CONFIRM_TIMEOUT_TICKS;
               }
 
               public static void tick(MinecraftClient client) {
-                  if (currentStage == Stage.IDLE) {
+                  if (currentState == State.IDLE) {
                       return;
                   }
 
-                  if (!isValidEnvironment(client) || client.world != activeWorld || placedAnchorPos == null) {
+                  if (!isValidEnvironment(client) || client.world != activeWorld || targetRailPos == null) {
                       cancelAndReset(client);
                       return;
                   }
@@ -361,226 +471,193 @@ jobs:
                   ClientWorld world = client.world;
                   PlayerInventory inventory = player.getInventory();
 
-                  if (player.squaredDistanceTo(Vec3d.ofCenter(placedAnchorPos)) > 36.0D) {
-                      finishOrAbort(client, true);
+                  if (player.squaredDistanceTo(Vec3d.ofCenter(targetRailPos)) > 36.0D) {
+                      failAndCleanup(client);
                       return;
                   }
 
-                  switch (currentStage) {
-                      case WAIT_FOR_ANCHOR_CONFIRED -> {
-                          if (stepDelayTicksRemaining > 0) {
-                              stepDelayTicksRemaining--;
+                  switch (currentState) {
+                      case WAIT_FOR_RAIL_CONFIRMATION -> {
+                          if (delayTicksRemaining > 0) {
+                              delayTicksRemaining--;
                           }
 
-                          BlockState state = world.getBlockState(placedAnchorPos);
-                          if (state.isOf(Blocks.RESPAWN_ANCHOR)) {
-                              if (stepDelayTicksRemaining <= 0) {
-                                  currentStage = Stage.CHARGE_GLOWSTONE;
-                                  waitTimeoutTicks = CONFIRMATION_TIMEOUT_TICKS;
+                          BlockState stateAtTarget = world.getBlockState(targetRailPos);
+                          if (isRailBlock(stateAtTarget)) {
+                              if (delayTicksRemaining <= 0) {
+                                  currentState = State.FIND_TNT_MINECART;
                               }
                           } else {
-                              waitTimeoutTicks--;
-                              if (waitTimeoutTicks <= 0) {
-                                  finishOrAbort(client, true);
+                              confirmTimeoutTicks--;
+                              if (confirmTimeoutTicks <= 0) {
+                                  failAndCleanup(client);
                               }
                           }
                       }
 
-                      case CHARGE_GLOWSTONE -> {
-                          if (stepDelayTicksRemaining > 0) {
-                              stepDelayTicksRemaining--;
+                      case FIND_TNT_MINECART -> {
+                          if (delayTicksRemaining > 0) {
+                              delayTicksRemaining--;
                               return;
                           }
 
-                          BlockState state = world.getBlockState(placedAnchorPos);
-                          if (!state.isOf(Blocks.RESPAWN_ANCHOR)) {
-                              finishOrAbort(client, true);
+                          if (!isRailBlock(world.getBlockState(targetRailPos))) {
+                              failAndCleanup(client);
                               return;
                           }
 
-                          int currentCharges = state.get(RespawnAnchorBlock.CHARGES);
-
-                          if (glowstoneUsedCount >= targetGlowstoneCount || currentCharges >= MAX_ANCHOR_CHARGES) {
-                              if (currentCharges > 0) {
-                                  currentStage = Stage.ACTIVATE_ANCHOR;
-                                  stepDelayTicksRemaining = Math.max(1, computeStepDelayTicks());
-                                  waitTimeoutTicks = CONFIRMATION_TIMEOUT_TICKS;
-                              } else {
-                                  finishOrAbort(client, true);
-                              }
+                          detectedCartSlot = HotbarDetector.findTntMinecartSlot(inventory);
+                          if (detectedCartSlot == -1) {
+                              player.sendMessage(MSG_NO_TNT_MINECART, true);
+                              failAndCleanup(client);
                               return;
                           }
 
-                          int glowstoneSlot = findHotbarSlotWithMinCount(inventory, Items.GLOWSTONE, 1);
-                          if (glowstoneSlot == -1) {
-                              player.sendMessage(MSG_NO_GLOWSTONE, true);
-                              if (currentCharges > 0) {
-                                  currentStage = Stage.ACTIVATE_ANCHOR;
-                                  stepDelayTicksRemaining = Math.max(1, computeStepDelayTicks());
-                              } else {
-                                  finishOrAbort(client, true);
-                              }
-                              return;
-                          }
-
-                          selectSlotAndSync(player, glowstoneSlot);
-
-                          BlockHitResult anchorHit = createBlockHitResult(placedAnchorPos, interactionSide);
-                          ActionResult chargeResult = interactionManager.interactBlock(player, Hand.MAIN_HAND, anchorHit);
-
-                          if (!chargeResult.isAccepted()) {
-                              finishOrAbort(client, true);
-                              return;
-                          }
-
-                          if (chargeResult instanceof ActionResult.Success success && success.swingSource() == ActionResult.SwingSource.CLIENT) {
-                              player.swingHand(Hand.MAIN_HAND);
-                          }
-
-                          glowstoneUsedCount++;
-
-                          if (glowstoneUsedCount < targetGlowstoneCount && (currentCharges + 1) < MAX_ANCHOR_CHARGES) {
-                              stepDelayTicksRemaining = Math.max(1, computeStepDelayTicks());
-                          } else {
-                              currentStage = Stage.ACTIVATE_ANCHOR;
-                              stepDelayTicksRemaining = Math.max(1, computeStepDelayTicks());
-                              waitTimeoutTicks = CONFIRMATION_TIMEOUT_TICKS;
-                          }
+                          currentState = State.PLACE_MINECART;
+                          executeMinecartPlacement(client, player, interactionManager, world, inventory);
                       }
 
-                      case ACTIVATE_ANCHOR -> {
-                          if (stepDelayTicksRemaining > 0) {
-                              stepDelayTicksRemaining--;
-                              return;
-                          }
-
-                          BlockState state = world.getBlockState(placedAnchorPos);
-                          if (!state.isOf(Blocks.RESPAWN_ANCHOR)) {
-                              finishOrAbort(client, true);
-                              return;
-                          }
-
-                          int charges = state.get(RespawnAnchorBlock.CHARGES);
-                          if (charges <= 0) {
-                              waitTimeoutTicks--;
-                              if (waitTimeoutTicks <= 0) {
-                                  finishOrAbort(client, true);
-                              }
-                              return;
-                          }
-
-                          int activationSlot = resolveActivationSlot(inventory);
-                          selectSlotAndSync(player, activationSlot);
-
-                          BlockHitResult activateHit = createBlockHitResult(placedAnchorPos, interactionSide);
-                          ActionResult activateResult = interactionManager.interactBlock(player, Hand.MAIN_HAND, activateHit);
-
-                          if (activateResult instanceof ActionResult.Success success && success.swingSource() == ActionResult.SwingSource.CLIENT) {
-                              player.swingHand(Hand.MAIN_HAND);
-                          }
-
-                          if (AnchorBindConfig.isRestorePreviousSlot()) {
-                              currentStage = Stage.RESTORE_SLOT;
-                              stepDelayTicksRemaining = 1;
-                          } else {
-                              resetState();
-                          }
+                      case PLACE_MINECART -> {
+                          executeMinecartPlacement(client, player, interactionManager, world, inventory);
                       }
 
                       case RESTORE_SLOT -> {
-                          if (stepDelayTicksRemaining > 0) {
-                              stepDelayTicksRemaining--;
+                          if (delayTicksRemaining > 0) {
+                              delayTicksRemaining--;
                               return;
                           }
-                          finishOrAbort(client, true);
+                          if (CartBindConfig.isRestorePreviousSlot()
+                                  && PlayerInventory.isValidHotbarIndex(savedOriginalSlot)) {
+                              selectSlotAndSync(player, savedOriginalSlot);
+                          }
+                          currentState = State.COMPLETE;
+                          resetToIdle();
                       }
 
-                      default -> resetState();
+                      case COMPLETE, FAILED -> resetToIdle();
+
+                      default -> resetToIdle();
+                  }
+              }
+
+              private static void executeMinecartPlacement(
+                      MinecraftClient client,
+                      ClientPlayerEntity player,
+                      ClientPlayerInteractionManager interactionManager,
+                      ClientWorld world,
+                      PlayerInventory inventory
+              ) {
+                  if (!isRailBlock(world.getBlockState(targetRailPos))) {
+                      failAndCleanup(client);
+                      return;
+                  }
+
+                  if (!PlayerInventory.isValidHotbarIndex(detectedCartSlot)
+                          || !inventory.getStack(detectedCartSlot).isOf(Items.TNT_MINECART)) {
+                      detectedCartSlot = HotbarDetector.findTntMinecartSlot(inventory);
+                      if (detectedCartSlot == -1) {
+                          player.sendMessage(MSG_NO_TNT_MINECART, true);
+                          failAndCleanup(client);
+                          return;
+                      }
+                  }
+
+                  selectSlotAndSync(player, detectedCartSlot);
+
+                  BlockHitResult railHit = createRailHitResult(targetRailPos);
+                  ActionResult cartResult = interactionManager.interactBlock(player, Hand.MAIN_HAND, railHit);
+
+                  if (!cartResult.isAccepted()) {
+                      failAndCleanup(client);
+                      return;
+                  }
+
+                  if (cartResult instanceof ActionResult.Success success && success.swingSource() == ActionResult.SwingSource.CLIENT) {
+                      player.swingHand(Hand.MAIN_HAND);
+                  }
+
+                  if (CartBindConfig.isRestorePreviousSlot()) {
+                      currentState = State.RESTORE_SLOT;
+                      delayTicksRemaining = 1;
+                  } else {
+                      currentState = State.COMPLETE;
+                      resetToIdle();
                   }
               }
 
               public static void cancelAndReset(MinecraftClient client) {
-                  finishOrAbort(client, AnchorBindConfig.isRestorePreviousSlot());
+                  failAndCleanup(client);
               }
 
-              private static void finishOrAbort(MinecraftClient client, boolean restoreSlot) {
-                  if (restoreSlot
-                          && AnchorBindConfig.isRestorePreviousSlot()
+              private static void failAndCleanup(MinecraftClient client) {
+                  currentState = State.FAILED;
+                  if (CartBindConfig.isRestorePreviousSlot()
                           && client != null
                           && client.player != null
                           && PlayerInventory.isValidHotbarIndex(savedOriginalSlot)) {
                       selectSlotAndSync(client.player, savedOriginalSlot);
                   }
-                  resetState();
+                  resetToIdle();
               }
 
-              private static void resetState() {
-                  currentStage = Stage.IDLE;
+              private static void resetToIdle() {
+                  currentState = State.IDLE;
                   savedOriginalSlot = -1;
-                  anchorSlotIndex = -1;
-                  placedAnchorPos = null;
-                  glowstoneUsedCount = 0;
-                  stepDelayTicksRemaining = 0;
-                  waitTimeoutTicks = 0;
+                  detectedRailSlot = -1;
+                  detectedCartSlot = -1;
+                  initialBlockHit = null;
+                  targetRailPos = null;
+                  railAlreadyPresent = false;
+                  delayTicksRemaining = 0;
+                  confirmTimeoutTicks = 0;
                   activeWorld = null;
               }
 
-              private static int computeStepDelayTicks() {
-                  double speedSeconds = AnchorBindConfig.getComboSpeedSeconds();
-                  int totalTicksBudget = (int) Math.round(speedSeconds * 20.0D);
-                  int transitions = Math.max(2, targetGlowstoneCount + 1);
-                  return Math.max(1, totalTicksBudget / transitions);
+              private static int computeStepDelayTicks(boolean reusingExistingRail) {
+                  double speedSeconds = CartBindConfig.getPlacementSpeedSeconds();
+                  if (speedSeconds <= 0.15D) {
+                      return reusingExistingRail ? 0 : 1;
+                  }
+                  int totalTicks = (int) Math.round(speedSeconds * 10.0D);
+                  if (reusingExistingRail) {
+                      return Math.max(1, totalTicks / 2);
+                  }
+                  return Math.max(1, totalTicks);
               }
 
-              private static int resolveActivationSlot(PlayerInventory inventory) {
-                  int currentAnchorSlot = findHotbarSlot(inventory, Items.RESPAWN_ANCHOR);
-                  if (currentAnchorSlot != -1) {
-                      return currentAnchorSlot;
+              private static boolean isRailBlock(BlockState state) {
+                  if (state == null) {
+                      return false;
                   }
-                  if (PlayerInventory.isValidHotbarIndex(anchorSlotIndex)
-                          && !inventory.getStack(anchorSlotIndex).isOf(Items.GLOWSTONE)) {
-                      return anchorSlotIndex;
-                  }
-                  if (PlayerInventory.isValidHotbarIndex(savedOriginalSlot)
-                          && !inventory.getStack(savedOriginalSlot).isOf(Items.GLOWSTONE)) {
-                      return savedOriginalSlot;
-                  }
-                  for (int i = 0; i < HOTBAR_SIZE; i++) {
-                      if (!inventory.getStack(i).isOf(Items.GLOWSTONE)) {
-                          return i;
-                      }
-                  }
-                  return PlayerInventory.isValidHotbarIndex(anchorSlotIndex) ? anchorSlotIndex : 0;
+                  return AbstractRailBlock.isRail(state) || state.isIn(BlockTags.RAILS);
               }
 
-              private static BlockPos resolveAnchorPlacementPos(
+              private static BlockPos resolveValidRailPlacementPos(
                       ClientWorld world,
                       ClientPlayerEntity player,
                       BlockHitResult blockHit,
-                      ItemStack anchorStack
+                      ItemStack railStack
               ) {
-                  BlockPos clickedPos = blockHit.getBlockPos();
-                  BlockState clickedState = world.getBlockState(clickedPos);
-
-                  if (clickedState.isOf(Blocks.RESPAWN_ANCHOR) && clickedState.get(RespawnAnchorBlock.CHARGES) == 0) {
-                      return clickedPos;
-                  }
-
-                  ItemPlacementContext placementContext = new ItemPlacementContext(player, Hand.MAIN_HAND, anchorStack, blockHit);
-                  if (!placementContext.canPlace()) {
+                  ItemPlacementContext context = new ItemPlacementContext(player, Hand.MAIN_HAND, railStack, blockHit);
+                  if (!context.canPlace()) {
                       return null;
                   }
-                  return placementContext.getBlockPos();
+
+                  BlockPos placementPos = context.getBlockPos();
+                  if (!Blocks.RAIL.getDefaultState().canPlaceAt(world, placementPos)) {
+                      return null;
+                  }
+
+                  return placementPos;
               }
 
-              private static BlockHitResult createBlockHitResult(BlockPos pos, Direction side) {
-                  Direction safeSide = (side != null) ? side : Direction.UP;
-                  Vec3d hitVec = Vec3d.ofCenter(pos).add(
-                          safeSide.getOffsetX() * 0.5D,
-                          safeSide.getOffsetY() * 0.5D,
-                          safeSide.getOffsetZ() * 0.5D
+              private static BlockHitResult createRailHitResult(BlockPos railPos) {
+                  Vec3d hitVec = new Vec3d(
+                          railPos.getX() + 0.5D,
+                          railPos.getY() + 0.0625D,
+                          railPos.getZ() + 0.5D
                   );
-                  return new BlockHitResult(hitVec, safeSide, pos, false);
+                  return new BlockHitResult(hitVec, Direction.UP, railPos, false);
               }
 
               private static void selectSlotAndSync(ClientPlayerEntity player, int slot) {
@@ -596,29 +673,6 @@ jobs:
                   }
               }
 
-              private static int findHotbarSlot(PlayerInventory inventory, net.minecraft.item.Item targetItem) {
-                  int selected = inventory.getSelectedSlot();
-                  if (PlayerInventory.isValidHotbarIndex(selected) && inventory.getStack(selected).isOf(targetItem)) {
-                      return selected;
-                  }
-                  for (int i = 0; i < HOTBAR_SIZE; i++) {
-                      if (inventory.getStack(i).isOf(targetItem)) {
-                          return i;
-                      }
-                  }
-                  return -1;
-              }
-
-              private static int findHotbarSlotWithMinCount(PlayerInventory inventory, net.minecraft.item.Item targetItem, int minCount) {
-                  for (int i = 0; i < HOTBAR_SIZE; i++) {
-                      ItemStack stack = inventory.getStack(i);
-                      if (stack.isOf(targetItem) && stack.getCount() >= minCount) {
-                          return i;
-                      }
-                  }
-                  return -1;
-              }
-
               private static boolean isValidEnvironment(MinecraftClient client) {
                   return client != null
                           && client.player != null
@@ -626,15 +680,16 @@ jobs:
                           && client.interactionManager != null
                           && client.currentScreen == null
                           && !client.player.isSpectator()
-                          && !client.player.isDead();
+                          && !client.player.isDead()
+                          && !client.player.isUsingItem();
               }
           }
           EOF
 
-          cat << 'EOF' > src/main/java/com/ahmad/anchorbind/config/AnchorBindConfig.java
-          package com.ahmad.anchorbind.config;
+          cat << 'EOF' > src/main/java/com/ahmad/cartbind/config/CartBindConfig.java
+          package com.ahmad.cartbind.config;
 
-          import com.ahmad.anchorbind.AnchorBindClient;
+          import com.ahmad.cartbind.CartBindClient;
           import net.fabricmc.loader.api.FabricLoader;
 
           import java.io.IOException;
@@ -645,24 +700,30 @@ jobs:
           import java.util.Locale;
           import java.util.Properties;
 
-          public final class AnchorBindConfig {
-              private static final String CONFIG_FILE_NAME = "anchorbind.properties";
+          public final class CartBindConfig {
+
+              public enum RailPreference {
+                  STANDARD_FIRST,
+                  ANY_SUITABLE
+              }
+
+              private static final String CONFIG_FILE_NAME = "cartbind.properties";
 
               private static final String KEY_ENABLED = "enabled";
-              private static final String KEY_COMBO_SPEED = "combo_speed_seconds";
-              private static final String KEY_GLOWSTONE_COUNT = "glowstone_count";
+              private static final String KEY_PLACEMENT_SPEED = "placement_speed_seconds";
+              private static final String KEY_RAIL_PREFERENCE = "rail_preference";
               private static final String KEY_RESTORE_SLOT = "restore_previous_slot";
 
               public static final double MIN_SPEED_SECONDS = 0.1D;
-              public static final double MAX_SPEED_SECONDS = 3.0D;
+              public static final double MAX_SPEED_SECONDS = 2.0D;
               public static final double DEFAULT_SPEED_SECONDS = 1.0D;
 
               private static boolean enabled = true;
-              private static double comboSpeedSeconds = DEFAULT_SPEED_SECONDS;
-              private static int glowstoneCount = 1;
+              private static double placementSpeedSeconds = DEFAULT_SPEED_SECONDS;
+              private static RailPreference railPreference = RailPreference.STANDARD_FIRST;
               private static boolean restorePreviousSlot = true;
 
-              private AnchorBindConfig() {
+              private CartBindConfig() {
               }
 
               public static boolean isEnabled() {
@@ -678,28 +739,25 @@ jobs:
                   setEnabled(!enabled);
               }
 
-              public static double getComboSpeedSeconds() {
-                  return comboSpeedSeconds;
+              public static double getPlacementSpeedSeconds() {
+                  return placementSpeedSeconds;
               }
 
-              public static void setComboSpeedSeconds(double value) {
+              public static void setPlacementSpeedSeconds(double value) {
                   double clamped = Math.max(MIN_SPEED_SECONDS, Math.min(MAX_SPEED_SECONDS, value));
-                  comboSpeedSeconds = Math.round(clamped * 10.0D) / 10.0D;
+                  placementSpeedSeconds = Math.round(clamped * 10.0D) / 10.0D;
                   save();
               }
 
-              public static int getGlowstoneCount() {
-                  return glowstoneCount;
+              public static RailPreference getRailPreference() {
+                  return railPreference;
               }
 
-              public static void setGlowstoneCount(int count) {
-                  glowstoneCount = Math.max(1, Math.min(3, count));
+              public static void toggleRailPreference() {
+                  railPreference = (railPreference == RailPreference.STANDARD_FIRST)
+                          ? RailPreference.ANY_SUITABLE
+                          : RailPreference.STANDARD_FIRST;
                   save();
-              }
-
-              public static void cycleGlowstoneCount() {
-                  int next = (glowstoneCount % 3) + 1;
-                  setGlowstoneCount(next);
               }
 
               public static boolean isRestorePreviousSlot() {
@@ -708,6 +766,14 @@ jobs:
 
               public static void toggleRestorePreviousSlot() {
                   restorePreviousSlot = !restorePreviousSlot;
+                  save();
+              }
+
+              public static void resetToDefaults() {
+                  enabled = true;
+                  placementSpeedSeconds = DEFAULT_SPEED_SECONDS;
+                  railPreference = RailPreference.STANDARD_FIRST;
+                  restorePreviousSlot = true;
                   save();
               }
 
@@ -726,11 +792,16 @@ jobs:
                   try (InputStream in = Files.newInputStream(path)) {
                       props.load(in);
                       enabled = parseBoolean(props.getProperty(KEY_ENABLED), true);
-                      comboSpeedSeconds = parseDouble(props.getProperty(KEY_COMBO_SPEED), DEFAULT_SPEED_SECONDS, MIN_SPEED_SECONDS, MAX_SPEED_SECONDS);
-                      glowstoneCount = parseInt(props.getProperty(KEY_GLOWSTONE_COUNT), 1, 1, 3);
+                      placementSpeedSeconds = parseDouble(
+                              props.getProperty(KEY_PLACEMENT_SPEED),
+                              DEFAULT_SPEED_SECONDS,
+                              MIN_SPEED_SECONDS,
+                              MAX_SPEED_SECONDS
+                      );
+                      railPreference = parseRailPreference(props.getProperty(KEY_RAIL_PREFERENCE));
                       restorePreviousSlot = parseBoolean(props.getProperty(KEY_RESTORE_SLOT), true);
                   } catch (IOException | IllegalArgumentException e) {
-                      AnchorBindClient.LOGGER.warn("Failed to read {}; using defaults.", CONFIG_FILE_NAME, e);
+                      CartBindClient.LOGGER.warn("Failed to load {}; using defaults.", CONFIG_FILE_NAME, e);
                   }
               }
 
@@ -738,17 +809,17 @@ jobs:
                   Path path = getConfigPath();
                   Properties props = new Properties();
                   props.setProperty(KEY_ENABLED, Boolean.toString(enabled));
-                  props.setProperty(KEY_COMBO_SPEED, String.format(Locale.ROOT, "%.1f", comboSpeedSeconds));
-                  props.setProperty(KEY_GLOWSTONE_COUNT, Integer.toString(glowstoneCount));
+                  props.setProperty(KEY_PLACEMENT_SPEED, String.format(Locale.ROOT, "%.1f", placementSpeedSeconds));
+                  props.setProperty(KEY_RAIL_PREFERENCE, railPreference.name());
                   props.setProperty(KEY_RESTORE_SLOT, Boolean.toString(restorePreviousSlot));
 
                   try {
                       Files.createDirectories(path.getParent());
                       try (OutputStream out = Files.newOutputStream(path)) {
-                          props.store(out, "Anchor Bind Configuration (Minecraft 1.21.11) - Credit: Ahmad");
+                          props.store(out, "Cart Bind Configuration (Minecraft 1.21.11) - Created by Ahmad");
                       }
                   } catch (IOException e) {
-                      AnchorBindClient.LOGGER.warn("Failed to save {}.", CONFIG_FILE_NAME, e);
+                      CartBindClient.LOGGER.warn("Failed to save {}.", CONFIG_FILE_NAME, e);
                   }
               }
 
@@ -766,18 +837,6 @@ jobs:
                   return fallback;
               }
 
-              private static int parseInt(String raw, int fallback, int min, int max) {
-                  if (raw == null) {
-                      return fallback;
-                  }
-                  try {
-                      int val = Integer.parseInt(raw.trim());
-                      return Math.max(min, Math.min(max, val));
-                  } catch (NumberFormatException e) {
-                      return fallback;
-                  }
-              }
-
               private static double parseDouble(String raw, double fallback, double min, double max) {
                   if (raw == null) {
                       return fallback;
@@ -790,13 +849,20 @@ jobs:
                       return fallback;
                   }
               }
+
+              private static RailPreference parseRailPreference(String raw) {
+                  if (raw != null && "ANY_SUITABLE".equalsIgnoreCase(raw.trim())) {
+                      return RailPreference.ANY_SUITABLE;
+                  }
+                  return RailPreference.STANDARD_FIRST;
+              }
           }
           EOF
 
-          cat << 'EOF' > src/main/java/com/ahmad/anchorbind/config/AnchorBindConfigScreen.java
-          package com.ahmad.anchorbind.config;
+          cat << 'EOF' > src/main/java/com/ahmad/cartbind/config/CartBindConfigScreen.java
+          package com.ahmad.cartbind.config;
 
-          import com.ahmad.anchorbind.AnchorBindClient;
+          import com.ahmad.cartbind.CartBindClient;
           import net.minecraft.client.gui.DrawContext;
           import net.minecraft.client.gui.screen.Screen;
           import net.minecraft.client.gui.screen.option.KeybindsScreen;
@@ -809,48 +875,53 @@ jobs:
 
           import java.util.Locale;
 
-          public final class AnchorBindConfigScreen extends Screen {
+          public final class CartBindConfigScreen extends Screen {
               private final Screen parent;
 
-              public AnchorBindConfigScreen(Screen parent) {
-                  super(Text.translatable("screen.anchorbind.config.title"));
+              private ButtonWidget enabledButton;
+              private PlacementSpeedSlider speedSlider;
+              private ButtonWidget railPrefButton;
+              private ButtonWidget restoreSlotButton;
+
+              public CartBindConfigScreen(Screen parent) {
+                  super(Text.translatable("screen.cartbind.config.title"));
                   this.parent = parent;
               }
 
               @Override
               protected void init() {
-                  int buttonWidth = 220;
+                  int buttonWidth = 230;
                   int buttonHeight = 20;
                   int centerX = this.width / 2 - buttonWidth / 2;
-                  int startY = this.height / 2 - 58;
+                  int startY = this.height / 2 - 70;
 
-                  this.addDrawableChild(ButtonWidget.builder(getEnabledText(), button -> {
-                      AnchorBindConfig.toggleEnabled();
+                  this.enabledButton = this.addDrawableChild(ButtonWidget.builder(getEnabledText(), button -> {
+                      CartBindConfig.toggleEnabled();
                       button.setMessage(getEnabledText());
                   }).dimensions(centerX, startY, buttonWidth, buttonHeight).build());
 
-                  this.addDrawableChild(new ComboSpeedSlider(
+                  this.speedSlider = this.addDrawableChild(new PlacementSpeedSlider(
                           centerX,
                           startY + 24,
                           buttonWidth,
                           buttonHeight,
-                          AnchorBindConfig.getComboSpeedSeconds()
+                          CartBindConfig.getPlacementSpeedSeconds()
                   ));
 
-                  this.addDrawableChild(ButtonWidget.builder(getGlowstoneCountText(), button -> {
-                      AnchorBindConfig.cycleGlowstoneCount();
-                      button.setMessage(getGlowstoneCountText());
+                  this.railPrefButton = this.addDrawableChild(ButtonWidget.builder(getRailPrefText(), button -> {
+                      CartBindConfig.toggleRailPreference();
+                      button.setMessage(getRailPrefText());
                   }).dimensions(centerX, startY + 48, buttonWidth, buttonHeight).build());
 
-                  this.addDrawableChild(ButtonWidget.builder(getRestoreSlotText(), button -> {
-                      AnchorBindConfig.toggleRestorePreviousSlot();
+                  this.restoreSlotButton = this.addDrawableChild(ButtonWidget.builder(getRestoreSlotText(), button -> {
+                      CartBindConfig.toggleRestorePreviousSlot();
                       button.setMessage(getRestoreSlotText());
                   }).dimensions(centerX, startY + 72, buttonWidth, buttonHeight).build());
 
-                  KeyBinding kb = AnchorBindClient.getAnchorComboKeyBinding();
-                  Text keyName = kb != null ? kb.getBoundKeyLocalizedText() : Text.literal("V");
+                  KeyBinding kb = CartBindClient.getPlaceCartKeyBinding();
+                  Text boundKey = kb != null ? kb.getBoundKeyLocalizedText() : Text.literal("G");
                   this.addDrawableChild(ButtonWidget.builder(
-                          Text.translatable("screen.anchorbind.config.open_controls", keyName),
+                          Text.translatable("screen.cartbind.config.open_controls", boundKey),
                           button -> {
                               if (this.client != null) {
                                   this.client.setScreen(new KeybindsScreen(this, this.client.options));
@@ -858,30 +929,53 @@ jobs:
                           }
                   ).dimensions(centerX, startY + 96, buttonWidth, buttonHeight).build());
 
+                  this.addDrawableChild(ButtonWidget.builder(
+                          Text.translatable("screen.cartbind.config.reset_defaults"),
+                          button -> {
+                              CartBindConfig.resetToDefaults();
+                              refreshWidgets();
+                          }
+                  ).dimensions(centerX, startY + 120, buttonWidth, buttonHeight).build());
+
                   this.addDrawableChild(ButtonWidget.builder(ScreenTexts.DONE, button -> close())
-                          .dimensions(centerX, startY + 128, buttonWidth, buttonHeight)
+                          .dimensions(centerX, startY + 148, buttonWidth, buttonHeight)
                           .build());
               }
 
-              private static Text getEnabledText() {
-                  if (AnchorBindConfig.isEnabled()) {
-                      return Text.translatable("screen.anchorbind.config.enabled_on").formatted(Formatting.GREEN);
+              private void refreshWidgets() {
+                  if (this.enabledButton != null) {
+                      this.enabledButton.setMessage(getEnabledText());
                   }
-                  return Text.translatable("screen.anchorbind.config.enabled_off").formatted(Formatting.RED);
+                  if (this.speedSlider != null) {
+                      this.speedSlider.setFromSeconds(CartBindConfig.getPlacementSpeedSeconds());
+                  }
+                  if (this.railPrefButton != null) {
+                      this.railPrefButton.setMessage(getRailPrefText());
+                  }
+                  if (this.restoreSlotButton != null) {
+                      this.restoreSlotButton.setMessage(getRestoreSlotText());
+                  }
               }
 
-              private static Text getGlowstoneCountText() {
-                  return Text.translatable(
-                          "screen.anchorbind.config.glowstone_count",
-                          Integer.toString(AnchorBindConfig.getGlowstoneCount())
-                  );
+              private static Text getEnabledText() {
+                  if (CartBindConfig.isEnabled()) {
+                      return Text.translatable("screen.cartbind.config.enabled_on").formatted(Formatting.GREEN);
+                  }
+                  return Text.translatable("screen.cartbind.config.enabled_off").formatted(Formatting.RED);
+              }
+
+              private static Text getRailPrefText() {
+                  if (CartBindConfig.getRailPreference() == CartBindConfig.RailPreference.STANDARD_FIRST) {
+                      return Text.translatable("screen.cartbind.config.rail_pref_standard");
+                  }
+                  return Text.translatable("screen.cartbind.config.rail_pref_any");
               }
 
               private static Text getRestoreSlotText() {
-                  if (AnchorBindConfig.isRestorePreviousSlot()) {
-                      return Text.translatable("screen.anchorbind.config.restore_slot_on").formatted(Formatting.GREEN);
+                  if (CartBindConfig.isRestorePreviousSlot()) {
+                      return Text.translatable("screen.cartbind.config.restore_slot_on").formatted(Formatting.GREEN);
                   }
-                  return Text.translatable("screen.anchorbind.config.restore_slot_off").formatted(Formatting.RED);
+                  return Text.translatable("screen.cartbind.config.restore_slot_off").formatted(Formatting.RED);
               }
 
               @Override
@@ -889,57 +983,62 @@ jobs:
                   super.render(context, mouseX, mouseY, delta);
 
                   int centerX = this.width / 2;
-                  int titleY = this.height / 2 - 84;
+                  int titleY = this.height / 2 - 92;
 
                   context.drawCenteredTextWithShadow(this.textRenderer, this.title, centerX, titleY, 0xFFFFFF);
 
-                  Text credit = Text.translatable("screen.anchorbind.config.credit").formatted(Formatting.DARK_GRAY);
-                  context.drawCenteredTextWithShadow(this.textRenderer, credit, centerX, this.height - 16, 0x808080);
+                  Text credit = Text.translatable("screen.cartbind.config.credit").formatted(Formatting.DARK_GRAY);
+                  context.drawCenteredTextWithShadow(this.textRenderer, credit, centerX, this.height - 15, 0x808080);
               }
 
               @Override
               public void close() {
-                  AnchorBindConfig.save();
+                  CartBindConfig.save();
                   if (this.client != null) {
                       this.client.setScreen(this.parent);
                   }
               }
 
-              private static final class ComboSpeedSlider extends SliderWidget {
+              private static final class PlacementSpeedSlider extends SliderWidget {
 
-                  ComboSpeedSlider(int x, int y, int width, int height, double currentSeconds) {
+                  PlacementSpeedSlider(int x, int y, int width, int height, double currentSeconds) {
                       super(x, y, width, height, Text.empty(), toNormalizedValue(currentSeconds));
                       this.updateMessage();
                   }
 
+                  void setFromSeconds(double seconds) {
+                      this.value = toNormalizedValue(seconds);
+                      this.updateMessage();
+                  }
+
                   private static double toNormalizedValue(double seconds) {
-                      double clamped = Math.max(AnchorBindConfig.MIN_SPEED_SECONDS, Math.min(AnchorBindConfig.MAX_SPEED_SECONDS, seconds));
-                      return (clamped - AnchorBindConfig.MIN_SPEED_SECONDS)
-                              / (AnchorBindConfig.MAX_SPEED_SECONDS - AnchorBindConfig.MIN_SPEED_SECONDS);
+                      double clamped = Math.max(CartBindConfig.MIN_SPEED_SECONDS, Math.min(CartBindConfig.MAX_SPEED_SECONDS, seconds));
+                      return (clamped - CartBindConfig.MIN_SPEED_SECONDS)
+                              / (CartBindConfig.MAX_SPEED_SECONDS - CartBindConfig.MIN_SPEED_SECONDS);
                   }
 
                   private double toSeconds() {
-                      double raw = AnchorBindConfig.MIN_SPEED_SECONDS
-                              + this.value * (AnchorBindConfig.MAX_SPEED_SECONDS - AnchorBindConfig.MIN_SPEED_SECONDS);
+                      double raw = CartBindConfig.MIN_SPEED_SECONDS
+                              + this.value * (CartBindConfig.MAX_SPEED_SECONDS - CartBindConfig.MIN_SPEED_SECONDS);
                       return Math.round(raw * 10.0D) / 10.0D;
                   }
 
                   @Override
                   protected void updateMessage() {
                       String formatted = String.format(Locale.ROOT, "%.1f", toSeconds());
-                      this.setMessage(Text.translatable("screen.anchorbind.config.combo_speed", formatted));
+                      this.setMessage(Text.translatable("screen.cartbind.config.placement_speed", formatted));
                   }
 
                   @Override
                   protected void applyValue() {
-                      AnchorBindConfig.setComboSpeedSeconds(toSeconds());
+                      CartBindConfig.setPlacementSpeedSeconds(toSeconds());
                   }
               }
           }
           EOF
 
-          cat << 'EOF' > src/main/java/com/ahmad/anchorbind/config/ModMenuIntegration.java
-          package com.ahmad.anchorbind.config;
+          cat << 'EOF' > src/main/java/com/ahmad/cartbind/config/ModMenuIntegration.java
+          package com.ahmad.cartbind.config;
 
           import com.terraformersmc.modmenu.api.ConfigScreenFactory;
           import com.terraformersmc.modmenu.api.ModMenuApi;
@@ -947,16 +1046,16 @@ jobs:
           public final class ModMenuIntegration implements ModMenuApi {
               @Override
               public ConfigScreenFactory<?> getModConfigScreenFactory() {
-                  return AnchorBindConfigScreen::new;
+                  return CartBindConfigScreen::new;
               }
           }
           EOF
 
-          for f in settings.gradle gradle.properties build.gradle src/main/resources/fabric.mod.json src/main/resources/assets/anchorbind/lang/en_us.json $(find src -name "*.java"); do
+          for f in settings.gradle gradle.properties build.gradle src/main/resources/fabric.mod.json src/main/resources/assets/cartbind/lang/en_us.json $(find src -name "*.java"); do
             sed -i 's/^          //' "$f"
           done
 
-          zip -r anchor-bind-src.zip settings.gradle gradle.properties build.gradle src/
+          zip -r CartBind-Source.zip settings.gradle gradle.properties build.gradle src/
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -970,13 +1069,15 @@ jobs:
           gradle-version: '9.2.1'
 
       - name: Build Mod with Gradle
-        run: gradle build
+        run: |
+          gradle build
+          cp build/libs/CartBind-1.0.0+mc1.21.11.jar CartBind.jar
 
-      - name: Upload Compiled Mod JAR and Source ZIP
+      - name: Upload CartBind.jar and CartBind-Source.zip
         uses: actions/upload-artifact@v4
         with:
-          name: anchor-bind-1.21.11-release
+          name: CartBind-1.21.11-Deliverables
           path: |
-            build/libs/*.jar
-            !build/libs/*-sources.jar
-            anchor-bind-src.zip
+            CartBind.jar
+            build/libs/CartBind-1.0.0+mc1.21.11.jar
+            CartBind-Source.zip
